@@ -74,6 +74,7 @@ export const reservationsAPI = {
   getById: (id) => api.get(`/reservations/${id}/`),
   create: (data) => api.post('/reservations/', data),
   update: (id, data) => api.patch(`/reservations/${id}/`, data),
+  updateStatus: (id, status) => api.patch(`/reservations/${id}/status/`, { status }),
   cancel: (id) => api.post(`/reservations/${id}/cancel/`),
   delete: (id, hard = false) => api.delete(`/reservations/${id}/`, { params: { hard } }),
 };

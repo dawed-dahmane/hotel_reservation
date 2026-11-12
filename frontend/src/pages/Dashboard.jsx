@@ -123,7 +123,7 @@ export const Dashboard = () => {
   // -------------------- BOOKING ACTIONS --------------------
   const handleUpdateBookingStatus = async (bookingId, newStatus) => {
     try {
-      await reservationsAPI.update(bookingId, { status: newStatus });
+      await reservationsAPI.updateStatus(bookingId, newStatus);
       showAlert('success', `Booking #${bookingId} updated to ${newStatus}.`);
       setBookingsList((prev) =>
         prev.map((b) => (b.id === bookingId ? { ...b, status: newStatus } : b))
