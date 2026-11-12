@@ -147,6 +147,19 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        # Baseline limits for the whole API. Raise these if legitimate traffic
+        # starts hitting 429; keep the auth scopes tight.
+        'anon': '120/min',
+        'user': '300/min',
+        # Auth endpoints (see api/throttling.py).
+        'auth': '5/min',        # per client IP, login + registration
+        'login_user': '5/min',  # per submitted username/email
+    },
     'DATETIME_FORMAT': "%Y-%m-%d %H:%M:%S",
     'DATE_FORMAT': "%Y-%m-%d",
 }
@@ -172,4 +185,30 @@ JWT_AUTH = {
     'ALGORITHM': 'HS256',
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(minutes=30),
+}
+
+# Security event logging. Failed logins and throttled auth attempts are written
+# under the `api.security` logger so they can be shipped and alerted on.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'security': {
+            'format': '[{asctime}] {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'security',
+        },
+    },
+    'loggers': {
+        'api.security': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
 }

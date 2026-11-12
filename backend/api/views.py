@@ -16,6 +16,7 @@ from .serializers import (
     ReviewSerializer
 )
 from .permissions import IsAdminOrReadOnly, IsOwnerOrAdmin, IsAdminUserOnly
+from .throttling import AuthRateThrottle, LoginUsernameRateThrottle
 
 
 class RegisterView(APIView):
@@ -23,6 +24,7 @@ class RegisterView(APIView):
     Class-based view for User Registration
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [AuthRateThrottle]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -39,9 +41,12 @@ class LoginView(APIView):
     Class-based view for User Login using PyJWT
     """
     permission_classes = [permissions.AllowAny]
+    # Per-IP limit plus a per-account limit so rotating IPs does not make
+    # password guessing against a single account unlimited.
+    throttle_classes = [AuthRateThrottle, LoginUsernameRateThrottle]
 
     def post(self, request):
-        serializer = LoginSerializer(data=request.data)
+        serializer = LoginSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             return Response(serializer.validated_data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

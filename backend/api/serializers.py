@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
@@ -5,6 +6,16 @@ from rest_framework import serializers
 from .models import Hotel, Room, Reservation, Review
 from .authentication import generate_tokens_for_user
 from django.contrib.auth.password_validation import validate_password
+
+# Failed authentication events. Configured in settings.LOGGING so they can be
+# shipped to a SIEM/alerting pipeline. Never log passwords or tokens.
+security_logger = logging.getLogger('api.security')
+
+
+def _client_ip(request):
+    if request is None:
+        return 'unknown'
+    return request.META.get('REMOTE_ADDR') or 'unknown'
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -67,9 +78,19 @@ class LoginSerializer(serializers.Serializer):
                 pass
 
         if not user:
+            security_logger.warning(
+                "Login failed for username=%r ip=%s reason=invalid_credentials",
+                username,
+                _client_ip(self.context.get('request')),
+            )
             raise serializers.ValidationError("Invalid credentials. Please check your username and password.")
 
         if not user.is_active:
+            security_logger.warning(
+                "Login failed for username=%r ip=%s reason=inactive_account",
+                username,
+                _client_ip(self.context.get('request')),
+            )
             raise serializers.ValidationError("This user account is inactive.")
 
         tokens = generate_tokens_for_user(user)

@@ -1,11 +1,15 @@
 from datetime import date, timedelta
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from rest_framework.test import APITestCase
 from rest_framework import status
 from api.models import Hotel, Room, Reservation, Review
 
 class HotelReservationApiTests(APITestCase):
     def setUp(self):
+        # Throttle counters live in the shared cache; reset them between tests.
+        cache.clear()
+
         # Create regular user
         self.user = User.objects.create_user(
             username='testuser',
@@ -102,6 +106,60 @@ class HotelReservationApiTests(APITestCase):
         }
         response = self.client.post('/api/auth/login/', payload)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_login_is_throttled_after_repeated_failures(self):
+        payload = {'username': 'testuser', 'password': 'WrongPassword!'}
+        # The login scope allows 5 requests per minute per IP / per account.
+        for _ in range(5):
+            response = self.client.post('/api/auth/login/', payload)
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        response = self.client.post('/api/auth/login/', payload)
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # Even the correct password is rejected while the limiter is active.
+        response = self.client.post(
+            '/api/auth/login/',
+            {'username': 'testuser', 'password': 'Password123!'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_login_throttle_is_per_account(self):
+        # Exhaust the limit for one account, then confirm another account is
+        # still served from the same IP (the per-IP counter still applies, so
+        # use a distinct client IP to isolate the per-account behaviour).
+        for _ in range(5):
+            self.client.post(
+                '/api/auth/login/',
+                {'username': 'testuser', 'password': 'WrongPassword!'},
+                REMOTE_ADDR='10.0.0.1',
+            )
+
+        response = self.client.post(
+            '/api/auth/login/',
+            {'username': 'otheruser', 'password': 'Password123!'},
+            REMOTE_ADDR='10.0.0.2',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_registration_is_throttled(self):
+        for index in range(5):
+            payload = {
+                'username': f'throttled{index}',
+                'email': f'throttled{index}@example.com',
+                'password': 'SecurePassword123!',
+                'confirm_password': 'SecurePassword123!',
+            }
+            response = self.client.post('/api/auth/register/', payload)
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        response = self.client.post('/api/auth/register/', {
+            'username': 'throttled_overflow',
+            'email': 'throttled_overflow@example.com',
+            'password': 'SecurePassword123!',
+            'confirm_password': 'SecurePassword123!',
+        })
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
     def test_user_profile_authenticated(self):
         headers = self.get_jwt_header(self.user)
