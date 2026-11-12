@@ -202,8 +202,42 @@ class ReservationCancelView(APIView):
         if reservation.status == 'cancelled':
             return Response({"message": "Reservation is already cancelled."}, status=status.HTTP_200_OK)
 
+        if reservation.status == 'completed':
+            return Response(
+                {"error": "Completed reservations cannot be cancelled."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         reservation.status = 'cancelled'
         reservation.save()
+        serializer = ReservationSerializer(reservation)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ReservationStatusView(APIView):
+    """
+    Staff-only status transition for a reservation.
+    Owners cannot change the status of their own booking through the detail
+    endpoint; only staff may move it between pending/confirmed/cancelled/completed.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdminUserOnly]
+
+    def patch(self, request, pk):
+        try:
+            reservation = Reservation.objects.get(pk=pk)
+        except Reservation.DoesNotExist:
+            return Response({"error": "Reservation not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        new_status = request.data.get('status')
+        allowed = {choice for choice, _label in Reservation.STATUS_CHOICES}
+        if new_status not in allowed:
+            return Response(
+                {"status": f"Invalid status. Choose one of: {', '.join(sorted(allowed))}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reservation.status = new_status
+        reservation.save(update_fields=['status', 'updated_at'])
         serializer = ReservationSerializer(reservation)
         return Response(serializer.data, status=status.HTTP_200_OK)
 

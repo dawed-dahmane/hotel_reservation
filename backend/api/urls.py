@@ -10,6 +10,7 @@ from .views import (
     ReservationListCreateView,
     ReservationDetailView,
     ReservationCancelView,
+    ReservationStatusView,
     ReviewListCreateView,
     DashboardStatsView,
 )
@@ -32,6 +33,7 @@ urlpatterns = [
     path('reservations/', ReservationListCreateView.as_view(), name='reservation-list-create'),
     path('reservations/<int:pk>/', ReservationDetailView.as_view(), name='reservation-detail'),
     path('reservations/<int:pk>/cancel/', ReservationCancelView.as_view(), name='reservation-cancel'),
+    path('reservations/<int:pk>/status/', ReservationStatusView.as_view(), name='reservation-status'),
 
     # Review Endpoints
     path('reviews/', ReviewListCreateView.as_view(), name='review-list-create'),

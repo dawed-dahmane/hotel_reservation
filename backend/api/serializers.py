@@ -191,7 +191,7 @@ class ReservationSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'user', 'total_price', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'total_price', 'status', 'created_at', 'updated_at']
 
     def get_nights(self, obj):
         if obj.check_in and obj.check_out:
@@ -199,16 +199,25 @@ class ReservationSerializer(serializers.ModelSerializer):
         return 0
 
     def validate(self, attrs):
-        check_in = attrs.get('check_in')
-        check_out = attrs.get('check_out')
-        room = attrs.get('room')
-        guests_count = attrs.get('guests_count', 1)
-
-        # In case of partial update
+        # Booking terms are fixed once the reservation exists. Changing the room
+        # or dates would also desynchronise the server-calculated total_price, so
+        # the owner must cancel and rebook instead.
         if self.instance:
-            check_in = check_in or self.instance.check_in
-            check_out = check_out or self.instance.check_out
-            room = room or self.instance.room
+            immutable = [f for f in ('room', 'check_in', 'check_out') if f in attrs]
+            if immutable:
+                raise serializers.ValidationError({
+                    field: "This field cannot be changed after the reservation is created. Cancel and rebook instead."
+                    for field in immutable
+                })
+            check_in = self.instance.check_in
+            check_out = self.instance.check_out
+            room = self.instance.room
+        else:
+            check_in = attrs.get('check_in')
+            check_out = attrs.get('check_out')
+            room = attrs.get('room')
+
+        guests_count = attrs.get('guests_count', getattr(self.instance, 'guests_count', 1))
 
         if check_in and check_out:
             if check_in >= check_out:

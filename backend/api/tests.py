@@ -277,3 +277,66 @@ class HotelReservationApiTests(APITestCase):
         self.assertTrue(response.data['is_admin'])
         self.assertIn('total_hotels', response.data['stats'])
         self.assertIn('total_revenue', response.data['stats'])
+
+    # 6. Reservation state-transition authorization
+    def _make_reservation(self, user=None):
+        return Reservation.objects.create(
+            user=user or self.user,
+            room=self.room,
+            check_in=date.today() + timedelta(days=30),
+            check_out=date.today() + timedelta(days=32),
+            guests_count=1,
+            total_price=300.00,
+            status='confirmed'
+        )
+
+    def test_owner_cannot_change_reservation_status(self):
+        reservation = self._make_reservation()
+        headers = self.get_jwt_header(self.user)
+        response = self.client.patch(
+            f'/api/reservations/{reservation.id}/',
+            {'status': 'completed'},
+            format='json',
+            **headers
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, 'confirmed')
+
+    def test_owner_cannot_change_booking_terms(self):
+        reservation = self._make_reservation()
+        headers = self.get_jwt_header(self.user)
+        response = self.client.patch(
+            f'/api/reservations/{reservation.id}/',
+            {'check_out': (date.today() + timedelta(days=45)).strftime('%Y-%m-%d')},
+            format='json',
+            **headers
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('check_out', response.data)
+
+    def test_admin_can_change_reservation_status(self):
+        reservation = self._make_reservation()
+        headers = self.get_jwt_header(self.admin)
+        response = self.client.patch(
+            f'/api/reservations/{reservation.id}/status/',
+            {'status': 'completed'},
+            format='json',
+            **headers
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, 'completed')
+
+    def test_non_admin_cannot_change_reservation_status(self):
+        reservation = self._make_reservation()
+        headers = self.get_jwt_header(self.user)
+        response = self.client.patch(
+            f'/api/reservations/{reservation.id}/status/',
+            {'status': 'completed'},
+            format='json',
+            **headers
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, 'confirmed')
