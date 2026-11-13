@@ -1,10 +1,12 @@
 from datetime import date, timedelta
 from django.contrib.auth.models import User
 from django.core.cache import cache
+from django.test import override_settings
 from rest_framework.test import APITestCase
 from rest_framework import status
 from api.models import Hotel, Room, Reservation, Review
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class HotelReservationApiTests(APITestCase):
     def setUp(self):
         # Throttle counters live in the shared cache; reset them between tests.
@@ -398,3 +400,42 @@ class HotelReservationApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         reservation.refresh_from_db()
         self.assertEqual(reservation.status, 'confirmed')
+
+    # 7. Transport and header hardening
+    def test_api_responses_carry_security_headers(self):
+        response = self.client.get('/api/hotels/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response['X-Content-Type-Options'], 'nosniff')
+        self.assertEqual(response['X-Frame-Options'], 'DENY')
+        self.assertIn("default-src 'none'", response['Content-Security-Policy'])
+        self.assertIn("frame-ancestors 'none'", response['Content-Security-Policy'])
+        self.assertIn('camera=()', response['Permissions-Policy'])
+        self.assertEqual(
+            response['Referrer-Policy'],
+            'strict-origin-when-cross-origin',
+        )
+
+    @override_settings(ALLOWED_HOSTS=['api.example.com'])
+    def test_unknown_host_header_is_rejected_and_logged(self):
+        with self.assertLogs('django.security', level='WARNING') as logs:
+            response = self.client.get('/api/hotels/', HTTP_HOST='attacker.example')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('attacker.example', '\n'.join(logs.output))
+
+    @override_settings(ALLOWED_HOSTS=['api.example.com'])
+    def test_allowed_host_header_is_accepted(self):
+        response = self.client.get('/api/hotels/', HTTP_HOST='api.example.com')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_env_flag_requires_explicit_opt_in(self):
+        import os
+        from unittest import mock
+        from backend.settings import _env_flag
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('DJANGO_TEST_FLAG', None)
+            self.assertFalse(_env_flag('DJANGO_TEST_FLAG', default=False))
+        with mock.patch.dict(os.environ, {'DJANGO_TEST_FLAG': 'TRUE'}):
+            self.assertTrue(_env_flag('DJANGO_TEST_FLAG', default=False))
+        with mock.patch.dict(os.environ, {'DJANGO_TEST_FLAG': 'False'}):
+            self.assertFalse(_env_flag('DJANGO_TEST_FLAG', default=True))

@@ -34,6 +34,19 @@ def _require_env(name):
     return value
 
 
+def _env_flag(name, default=False):
+    """Read a boolean environment variable without silent truthiness bugs."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == '':
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _env_list(name):
+    """Read a comma-separated environment variable as a list."""
+    return [item.strip() for item in os.getenv(name, '').split(',') if item.strip()]
+
+
 # SECURITY WARNING: keep the secret key used in production secret!
 # No fallback value: a hardcoded default in the repository would let anyone
 # with the source forge session cookies and JWTs.
@@ -45,9 +58,44 @@ SECRET_KEY = _require_env('DJANGO_SECRET_KEY')
 JWT_SIGNING_KEY = os.getenv('JWT_SIGNING_KEY') or SECRET_KEY
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+# Opt-in: a missing DEBUG variable means production behaviour, so an
+# unconfigured deployment cannot leak tracebacks, SQL and settings.
+DEBUG = _env_flag('DEBUG', default=False)
 
-ALLOWED_HOSTS = ['*']
+# Accept only explicitly listed Host headers. With DEBUG off the list must be
+# provided: a wildcard would let an attacker influence absolute URLs Django
+# builds (password-reset links, redirects) via a spoofed Host header.
+ALLOWED_HOSTS = _env_list('DJANGO_ALLOWED_HOSTS')
+if not ALLOWED_HOSTS:
+    if DEBUG:
+        ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']
+    else:
+        raise ImproperlyConfigured(
+            "DJANGO_ALLOWED_HOSTS must be set when DEBUG=False "
+            "(comma-separated, e.g. 'api.example.com,www.example.com')."
+        )
+
+# Transport and browser hardening. The HTTPS-only settings are tied to DEBUG so
+# `runserver` over plain HTTP keeps working locally; in production they are on.
+# DJANGO_SECURE_SSL_REDIRECT can override the default, e.g. when running with
+# DEBUG=False locally over HTTP.
+SECURE_SSL_REDIRECT = _env_flag('DJANGO_SECURE_SSL_REDIRECT', default=not DEBUG)
+SECURE_HSTS_SECONDS = int(os.getenv('DJANGO_HSTS_SECONDS') or (0 if DEBUG else 31536000))
+# Opt-in: only enable once every subdomain is HTTPS-only, it is sticky in browsers.
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_flag('DJANGO_HSTS_INCLUDE_SUBDOMAINS', default=False)
+SECURE_HSTS_PRELOAD = False
+
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+X_FRAME_OPTIONS = 'DENY'
+
+# Only trust X-Forwarded-Proto when the app really sits behind a TLS-terminating
+# proxy; otherwise a client can spoof it.
+if _env_flag('DJANGO_BEHIND_PROXY', default=False):
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Application definition
 INSTALLED_APPS = [
@@ -69,6 +117,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'backend.middleware.SecurityHeadersMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -164,6 +213,13 @@ REST_FRAMEWORK = {
     'DATE_FORMAT': "%Y-%m-%d",
 }
 
+# In production the API speaks JSON only: no browsable API pages, and therefore
+# no server-rendered HTML responses that could disclose internals.
+if not DEBUG:
+    REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = [
+        'rest_framework.renderers.JSONRenderer',
+    ]
+
 # CORS Configuration
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
@@ -206,6 +262,19 @@ LOGGING = {
     },
     'loggers': {
         'api.security': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        # Unhandled 500s are logged with their traceback; clients only receive a
+        # generic error page because DEBUG is off.
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+        # Suspicious requests (bad Host header, CSRF failures, ...).
+        'django.security': {
             'handlers': ['console'],
             'level': 'WARNING',
             'propagate': False,
