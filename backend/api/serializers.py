@@ -1,10 +1,11 @@
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from django.db import IntegrityError, connection, transaction
 from rest_framework import serializers
-from .models import Hotel, Room, Reservation, Review
-from .authentication import generate_tokens_for_user
+from .models import Hotel, Room, Reservation, Review, RevokedRefreshToken
+from .authentication import decode_refresh_token, generate_tokens_for_user
 from django.contrib.auth.password_validation import validate_password
 
 # Failed authentication events. Configured in settings.LOGGING so they can be
@@ -105,9 +106,44 @@ class ReviewSerializer(serializers.ModelSerializer):
         fields = ['id', 'hotel', 'user', 'user_name', 'rating', 'comment', 'created_at']
         read_only_fields = ['id', 'user', 'created_at']
 
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        hotel = attrs.get('hotel') or getattr(self.instance, 'hotel', None)
+        if not user or not user.is_authenticated or hotel is None:
+            return attrs
+
+        # Reviews are only credible from guests who actually completed a stay:
+        # without this an account can post arbitrary reviews and move ratings.
+        stayed = Reservation.objects.filter(
+            user=user,
+            room__hotel=hotel,
+            status__in=['confirmed', 'completed'],
+            check_out__lte=date.today(),
+        ).exists()
+        if not stayed:
+            raise serializers.ValidationError(
+                {'hotel': 'You can only review a hotel after a completed stay there.'}
+            )
+
+        existing = Review.objects.filter(hotel=hotel, user=user)
+        if self.instance is not None:
+            existing = existing.exclude(pk=self.instance.pk)
+        if existing.exists():
+            raise serializers.ValidationError(
+                {'hotel': 'You have already reviewed this hotel.'}
+            )
+        return attrs
+
     def create(self, validated_data):
         validated_data['user'] = self.context['request'].user
-        return super().create(validated_data)
+        try:
+            return super().create(validated_data)
+        except IntegrityError:
+            # Covers the race between the check above and the unique constraint.
+            raise serializers.ValidationError(
+                {'hotel': 'You have already reviewed this hotel.'}
+            )
 
 
 class RoomSerializer(serializers.ModelSerializer):
@@ -244,8 +280,10 @@ class ReservationSerializer(serializers.ModelSerializer):
             if check_in >= check_out:
                 raise serializers.ValidationError({"check_out": "Check-out date must be after check-in date."})
             
-            # Allow booking starting today or future
-            if check_in < date.today():
+            # Allow booking starting today or future. Only checked on creation:
+            # an existing booking naturally becomes "in the past" as time passes,
+            # and that must not block editing its guest details.
+            if self.instance is None and check_in < date.today():
                 raise serializers.ValidationError({"check_in": "Check-in date cannot be in the past."})
 
         if room:
@@ -275,7 +313,7 @@ class ReservationSerializer(serializers.ModelSerializer):
         room = validated_data['room']
         check_in = validated_data['check_in']
         check_out = validated_data['check_out']
-        
+
         # Calculate total price
         nights = (check_out - check_in).days
         if nights <= 0:
@@ -291,5 +329,59 @@ class ReservationSerializer(serializers.ModelSerializer):
         if not validated_data.get('guest_email'):
             validated_data['guest_email'] = user.email
 
-        return super().create(validated_data)
+        try:
+            with transaction.atomic():
+                # Serialise concurrent bookings of the same room. Databases with
+                # row locks (PostgreSQL/MySQL) block the second request here;
+                # SQLite serialises writers and the unique constraint below
+                # catches an identical stay.
+                if connection.features.has_select_for_update:
+                    room = Room.objects.select_for_update().get(pk=room.pk)
+                overlapping = Reservation.objects.filter(
+                    room=room,
+                    status__in=['pending', 'confirmed'],
+                    check_in__lt=check_out,
+                    check_out__gt=check_in,
+                ).exists()
+                if overlapping:
+                    raise serializers.ValidationError({
+                        "room": "This room is already reserved for the selected dates. "
+                                "Please choose different dates."
+                    })
+                return super().create(validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError({
+                "room": "This room is already reserved for the selected dates. "
+                        "Please choose different dates."
+            })
+
+
+class RefreshTokenSerializer(serializers.Serializer):
+    """Rotates a refresh token: the presented one is revoked and a new pair issued."""
+
+    refresh = serializers.CharField(write_only=True)
+
+    def validate_refresh(self, value):
+        payload = decode_refresh_token(value)
+        if RevokedRefreshToken.objects.filter(jti=payload['jti']).exists():
+            raise serializers.ValidationError('This refresh token has been revoked.')
+
+        user = User.objects.filter(pk=payload['user_id'], is_active=True).first()
+        if user is None:
+            raise serializers.ValidationError('User not found or inactive.')
+
+        self._payload = payload
+        self._user = user
+        return value
+
+    def save(self, **kwargs):
+        # Revoke the token that was just presented so a stolen copy cannot be
+        # replayed after rotation.
+        RevokedRefreshToken.objects.get_or_create(
+            jti=self._payload['jti'],
+            defaults={
+                'expires_at': datetime.fromtimestamp(self._payload['exp'], tz=timezone.utc),
+            },
+        )
+        return generate_tokens_for_user(self._user)
 

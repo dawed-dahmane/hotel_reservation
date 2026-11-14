@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { reservationsAPI } from '../services/api';
+import { reservationsAPI, unwrapList } from '../services/api';
 import {
   CalendarCheck,
   MapPin,
@@ -24,8 +24,8 @@ export const MyBookings = () => {
   const fetchBookings = async () => {
     try {
       setLoading(true);
-      const res = await reservationsAPI.getAll();
-      setBookings(res.data);
+      const res = await reservationsAPI.getAll({ page_size: 100 });
+      setBookings(unwrapList(res.data));
     } catch (err) {
       console.error('Error fetching bookings:', err);
     } finally {

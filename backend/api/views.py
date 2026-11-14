@@ -10,6 +10,7 @@ from .serializers import (
     UserSerializer,
     RegisterSerializer,
     LoginSerializer,
+    RefreshTokenSerializer,
     HotelSerializer,
     RoomSerializer,
     ReservationSerializer,
@@ -49,6 +50,20 @@ class LoginView(APIView):
         serializer = LoginSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RefreshTokenView(APIView):
+    """
+    Rotate a refresh token: the presented token is revoked and a new access /
+    refresh pair is returned.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = RefreshTokenSerializer(data=request.data)
+        if serializer.is_valid():
+            return Response(serializer.save(), status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 

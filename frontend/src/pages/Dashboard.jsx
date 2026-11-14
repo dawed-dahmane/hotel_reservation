@@ -5,6 +5,7 @@ import {
   hotelsAPI,
   roomsAPI,
   reservationsAPI,
+  unwrapList,
 } from '../services/api';
 import {
   LayoutDashboard,
@@ -90,16 +91,16 @@ export const Dashboard = () => {
 
       if (isAdmin) {
         const [bookingsRes, hotelsRes, roomsRes] = await Promise.all([
-          reservationsAPI.getAll(),
-          hotelsAPI.getAll(),
-          roomsAPI.getAll(),
+          reservationsAPI.getAll({ page_size: 100 }),
+          hotelsAPI.getAll({ page_size: 100 }),
+          roomsAPI.getAll({ page_size: 100 }),
         ]);
-        setBookingsList(bookingsRes.data);
-        setHotelsList(hotelsRes.data);
-        setRoomsList(roomsRes.data);
+        setBookingsList(unwrapList(bookingsRes.data));
+        setHotelsList(unwrapList(hotelsRes.data));
+        setRoomsList(unwrapList(roomsRes.data));
       } else {
-        const bookingsRes = await reservationsAPI.getAll();
-        setBookingsList(bookingsRes.data);
+        const bookingsRes = await reservationsAPI.getAll({ page_size: 100 });
+        setBookingsList(unwrapList(bookingsRes.data));
       }
     } catch (err) {
       console.error('Error fetching dashboard data:', err);

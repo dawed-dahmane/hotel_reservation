@@ -1,10 +1,31 @@
+import os
+import secrets
+
 from datetime import date, timedelta
 from django.core.management.base import BaseCommand
 from django.contrib.auth.models import User
 from api.models import Hotel, Room, Reservation, Review
 
+
 class Command(BaseCommand):
     help = 'Seeds initial sample data for hotels, rooms, users, and reservations'
+
+    def _password_for(self, env_name, username):
+        """Use SEED_*_PASSWORD when provided, otherwise generate a random one.
+
+        Hardcoded seed passwords end up in production logins and CI caches;
+        generating them keeps local seeding convenient without shipping a known
+        credential.
+        """
+        password = os.getenv(env_name)
+        if password:
+            return password
+        password = secrets.token_urlsafe(12)
+        self.stdout.write(self.style.WARNING(
+            f"Generated {username} password: {password} "
+            f"(set {env_name} to choose a stable value)"
+        ))
+        return password
 
     def handle(self, *args, **options):
         self.stdout.write("Seeding hotel data...")
@@ -21,12 +42,9 @@ class Command(BaseCommand):
             }
         )
         if created:
-            admin_user.set_password('admin123')
+            admin_user.set_password(self._password_for('SEED_ADMIN_PASSWORD', 'admin'))
             admin_user.save()
-            self.stdout.write(self.style.SUCCESS("Created admin user (admin / admin123)"))
-        else:
-            admin_user.set_password('admin123')
-            admin_user.save()
+            self.stdout.write(self.style.SUCCESS("Created admin user (username: admin)"))
 
         # 2. Demo User
         demo_user, created = User.objects.get_or_create(
@@ -38,9 +56,9 @@ class Command(BaseCommand):
             }
         )
         if created:
-            demo_user.set_password('password123')
+            demo_user.set_password(self._password_for('SEED_DEMO_PASSWORD', 'john_doe'))
             demo_user.save()
-            self.stdout.write(self.style.SUCCESS("Created demo user (john_doe / password123)"))
+            self.stdout.write(self.style.SUCCESS("Created demo user (username: john_doe)"))
 
         # 3. Sample Hotels
         hotels_data = [

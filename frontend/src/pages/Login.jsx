@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LogIn, Key, User, AlertCircle, CheckCircle, ShieldCheck } from 'lucide-react';
+import { LogIn, Key, User, AlertCircle } from 'lucide-react';
 
 export const Login = () => {
   const { login } = useAuth();
@@ -16,7 +16,6 @@ export const Login = () => {
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors },
   } = useForm({
     defaultValues: {
@@ -45,11 +44,6 @@ export const Login = () => {
   };
 
   // Quick helper to fill demo credentials
-  const fillCredentials = (user, pass) => {
-    setValue('username', user, { shouldValidate: true });
-    setValue('password', pass, { shouldValidate: true });
-  };
-
   return (
     <div className="auth-page-container">
       <div className="auth-card">
@@ -131,30 +125,6 @@ export const Login = () => {
             )}
           </button>
         </form>
-
-        {/* Quick Demo Credentials for pair tester */}
-        <div className="demo-credentials-box">
-          <div className="demo-title">
-            <ShieldCheck size={16} />
-            <span>One-Click Demo Credentials:</span>
-          </div>
-          <div className="demo-buttons-row">
-            <button
-              type="button"
-              className="btn-demo-badge admin"
-              onClick={() => fillCredentials('admin', 'admin123')}
-            >
-              Fill Admin (admin / admin123)
-            </button>
-            <button
-              type="button"
-              className="btn-demo-badge guest"
-              onClick={() => fillCredentials('john_doe', 'password123')}
-            >
-              Fill Guest (john_doe / password123)
-            </button>
-          </div>
-        </div>
 
         <div className="auth-footer-prompt">
           <span>Don't have an account yet?</span>{' '}

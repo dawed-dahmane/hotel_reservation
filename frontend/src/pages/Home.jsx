@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { hotelsAPI } from '../services/api';
+import { hotelsAPI, unwrapList } from '../services/api';
 import {
   Search,
   MapPin,
@@ -28,12 +28,13 @@ export const Home = () => {
     const fetchHotels = async () => {
       try {
         const res = await hotelsAPI.getAll({ featured: 'true' });
+        const featured = unwrapList(res.data);
         // If featured list is small, fallback to top hotels
-        if (res.data && res.data.length > 0) {
-          setFeaturedHotels(res.data);
+        if (featured.length > 0) {
+          setFeaturedHotels(featured);
         } else {
           const allRes = await hotelsAPI.getAll();
-          setFeaturedHotels(allRes.data.slice(0, 3));
+          setFeaturedHotels(unwrapList(allRes.data).slice(0, 3));
         }
       } catch (err) {
         console.error('Error fetching featured hotels:', err);

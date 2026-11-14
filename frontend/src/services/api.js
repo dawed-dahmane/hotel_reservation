@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://127.0.0.1:8000/api';
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -8,6 +9,46 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+const AUTH_KEYS = ['access_token', 'refresh_token', 'user_data'];
+
+const clearAuth = () => {
+  AUTH_KEYS.forEach((key) => localStorage.removeItem(key));
+};
+
+// List endpoints are paginated ({count, next, previous, results}); this keeps
+// call sites working with a plain array.
+export const unwrapList = (payload) =>
+  Array.isArray(payload) ? payload : payload?.results ?? [];
+
+// Single-flight refresh: concurrent 401s share one rotation request so a
+// rotated token is never replayed.
+let refreshPromise = null;
+
+const refreshAccessToken = () => {
+  const refresh = localStorage.getItem('refresh_token');
+  if (!refresh) {
+    return Promise.reject(new Error('No refresh token stored.'));
+  }
+
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post(`${API_BASE_URL}/auth/refresh/`, { refresh })
+      .then(({ data }) => {
+        localStorage.setItem('access_token', data.access);
+        localStorage.setItem('refresh_token', data.refresh);
+        if (data.user) {
+          localStorage.setItem('user_data', JSON.stringify(data.user));
+        }
+        return data.access;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+
+  return refreshPromise;
+};
 
 // Request interceptor to attach JWT token
 api.interceptors.request.use(
@@ -21,23 +62,37 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor to catch unauthorized errors
+// Response interceptor: rotate the refresh token once on 401, then retry.
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response && error.response.status === 401) {
-      // Clean stale auth data if token is invalid or expired
-      const token = localStorage.getItem('access_token');
-      if (token && !error.config.url.includes('/auth/login/')) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        localStorage.removeItem('user_data');
-        if (window.location.pathname !== '/login') {
-          window.location.href = '/login';
-        }
-      }
+  async (error) => {
+    const { response, config } = error;
+    if (!response || response.status !== 401 || !config) {
+      return Promise.reject(error);
     }
-    return Promise.reject(error);
+
+    const url = config.url || '';
+    const isAuthCall = ['/auth/login/', '/auth/register/', '/auth/refresh/'].some(
+      (path) => url.includes(path)
+    );
+
+    if (isAuthCall || config._retried) {
+      clearAuth();
+      return Promise.reject(error);
+    }
+
+    try {
+      const access = await refreshAccessToken();
+      config._retried = true;
+      config.headers = { ...config.headers, Authorization: `Bearer ${access}` };
+      return api(config);
+    } catch {
+      clearAuth();
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+      return Promise.reject(error);
+    }
   }
 );
 
@@ -45,6 +100,7 @@ api.interceptors.response.use(
 export const authAPI = {
   login: (credentials) => api.post('/auth/login/', credentials),
   register: (userData) => api.post('/auth/register/', userData),
+  refresh: (refresh) => api.post('/auth/refresh/', { refresh }),
   getProfile: () => api.get('/auth/profile/'),
 };
 
@@ -91,4 +147,3 @@ export const dashboardAPI = {
 };
 
 export default api;
-

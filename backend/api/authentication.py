@@ -1,5 +1,6 @@
 import jwt
 from datetime import datetime, timezone
+from uuid import uuid4
 from django.conf import settings
 from django.contrib.auth.models import User
 from rest_framework import authentication, exceptions
@@ -25,6 +26,7 @@ def generate_tokens_for_user(user):
         'is_superuser': user.is_superuser,
         'exp': access_exp,
         'iat': now,
+        'jti': uuid4().hex,
         'type': 'access',
     }
 
@@ -32,6 +34,7 @@ def generate_tokens_for_user(user):
         'user_id': user.id,
         'exp': refresh_exp,
         'iat': now,
+        'jti': uuid4().hex,
         'type': 'refresh',
     }
 
@@ -78,6 +81,11 @@ class JWTAuthentication(authentication.BaseAuthentication):
         except jwt.InvalidTokenError:
             raise exceptions.AuthenticationFailed('Invalid token.')
 
+        # A refresh token must never authenticate an API request: it lives
+        # longer and is only meant for the /auth/refresh/ endpoint.
+        if payload.get('type') != 'access':
+            raise exceptions.AuthenticationFailed('Invalid token type.')
+
         user_id = payload.get('user_id')
         if not user_id:
             raise exceptions.AuthenticationFailed('Invalid token payload.')
@@ -91,3 +99,24 @@ class JWTAuthentication(authentication.BaseAuthentication):
             raise exceptions.AuthenticationFailed('User is inactive.')
 
         return (user, payload)
+
+
+def decode_refresh_token(token):
+    """Validate a refresh token and return its payload.
+
+    Raises ``AuthenticationFailed`` for anything that is not a well-formed,
+    unexpired refresh token, including access tokens presented in its place.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise exceptions.AuthenticationFailed('Refresh token has expired.')
+    except jwt.InvalidTokenError:
+        raise exceptions.AuthenticationFailed('Invalid refresh token.')
+
+    if payload.get('type') != 'refresh':
+        raise exceptions.AuthenticationFailed('Invalid token type.')
+    if not payload.get('jti') or not payload.get('user_id'):
+        raise exceptions.AuthenticationFailed('Invalid token payload.')
+
+    return payload

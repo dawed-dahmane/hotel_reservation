@@ -89,6 +89,16 @@ class Reservation(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            # Defence in depth against double booking: the serializer checks for
+            # overlapping ranges, but two concurrent requests can both pass that
+            # check. The database rejects the identical stay, and a row lock in
+            # the serializer serialises the rest (see ReservationSerializer.create).
+            models.UniqueConstraint(
+                fields=['room', 'check_in', 'check_out'],
+                name='unique_room_stay_dates',
+            ),
+        ]
 
     def __str__(self):
         return f"Booking #{self.id} - {self.room} ({self.user.username})"
@@ -106,6 +116,29 @@ class Review(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            # One review per guest per hotel: without this a single account can
+            # post unlimited reviews and move the average rating at will.
+            models.UniqueConstraint(
+                fields=['hotel', 'user'],
+                name='unique_review_per_user_hotel',
+            ),
+        ]
 
     def __str__(self):
         return f"Review by {self.user.username} on {self.hotel.name}"
+
+
+class RevokedRefreshToken(models.Model):
+    """Refresh tokens that were rotated or logged out.
+
+    Only the JWT id (``jti``) is stored, so a leaked database row cannot be
+    replayed as a token. Rows are safe to delete once ``expires_at`` has passed.
+    """
+
+    jti = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField(db_index=True)
+    revoked_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"revoked {self.jti} until {self.expires_at}"

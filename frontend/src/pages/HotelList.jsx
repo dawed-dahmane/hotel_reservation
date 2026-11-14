@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { hotelsAPI } from '../services/api';
+import { hotelsAPI, unwrapList } from '../services/api';
 import {
   Search,
   MapPin,
@@ -31,8 +31,8 @@ export const HotelList = () => {
       if (searchTerm) params.search = searchTerm;
       if (selectedCity && selectedCity !== 'all') params.city = selectedCity;
 
-      const res = await hotelsAPI.getAll(params);
-      let data = res.data;
+      const res = await hotelsAPI.getAll({ ...params, page_size: 100 });
+      let data = unwrapList(res.data);
 
       // Filter by min rating if specified
       if (minRating !== 'all') {
@@ -72,7 +72,7 @@ export const HotelList = () => {
     setMinRating('all');
     setSortBy('recommended');
     setSearchParams({});
-    hotelsAPI.getAll().then((res) => setHotels(res.data));
+    hotelsAPI.getAll({ page_size: 100 }).then((res) => setHotels(unwrapList(res.data)));
   };
 
   return (

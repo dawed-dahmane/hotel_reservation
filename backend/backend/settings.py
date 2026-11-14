@@ -209,6 +209,10 @@ REST_FRAMEWORK = {
         'auth': '5/min',        # per client IP, login + registration
         'login_user': '5/min',  # per submitted username/email
     },
+    # Every list endpoint is paginated: an unpaginated response grows with the
+    # database and lets one caller pull the whole table (API4:2023).
+    'DEFAULT_PAGINATION_CLASS': 'api.pagination.StandardResultsSetPagination',
+    'PAGE_SIZE': 25,
     'DATETIME_FORMAT': "%Y-%m-%d %H:%M:%S",
     'DATE_FORMAT': "%Y-%m-%d",
 }
@@ -221,8 +225,15 @@ if not DEBUG:
     ]
 
 # CORS Configuration
-CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOW_CREDENTIALS = True
+# Origins are an explicit allowlist, not a wildcard: with `allow all` plus
+# credentials any website could read authenticated responses (including the
+# Django admin) as the logged-in user. JWTs travel in the Authorization header,
+# so cross-origin cookie credentials are not needed at all.
+CORS_ALLOWED_ORIGINS = _env_list('CORS_ALLOWED_ORIGINS')
+if not CORS_ALLOWED_ORIGINS and DEBUG:
+    # Vite dev server defaults.
+    CORS_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
+CORS_ALLOW_CREDENTIALS = False
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',

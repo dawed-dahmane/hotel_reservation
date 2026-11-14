@@ -177,7 +177,8 @@ class HotelReservationApiTests(APITestCase):
     def test_list_hotels_anonymous(self):
         response = self.client.get('/api/hotels/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertTrue(len(response.data) >= 1)
+        self.assertIn('results', response.data)
+        self.assertGreaterEqual(response.data['count'], 1)
 
     def test_create_hotel_non_admin_forbidden(self):
         headers = self.get_jwt_header(self.user)
@@ -439,3 +440,119 @@ class HotelReservationApiTests(APITestCase):
             self.assertTrue(_env_flag('DJANGO_TEST_FLAG', default=False))
         with mock.patch.dict(os.environ, {'DJANGO_TEST_FLAG': 'False'}):
             self.assertFalse(_env_flag('DJANGO_TEST_FLAG', default=True))
+
+    # 8. Token handling, pagination, CORS and review integrity
+    def test_refresh_token_cannot_authenticate_api_requests(self):
+        from api.authentication import generate_tokens_for_user
+
+        tokens = generate_tokens_for_user(self.user)
+        response = self.client.get(
+            '/api/auth/profile/',
+            HTTP_AUTHORIZATION=f"Bearer {tokens['refresh']}",
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_refresh_token_rotation_revokes_presented_token(self):
+        from api.authentication import generate_tokens_for_user
+
+        tokens = generate_tokens_for_user(self.user)
+        first = self.client.post('/api/auth/refresh/', {'refresh': tokens['refresh']}, format='json')
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertIn('access', first.data)
+        self.assertIn('refresh', first.data)
+
+        replay = self.client.post('/api/auth/refresh/', {'refresh': tokens['refresh']}, format='json')
+        self.assertIn(replay.status_code, (status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED))
+
+        # The rotated access token works.
+        profile = self.client.get(
+            '/api/auth/profile/',
+            HTTP_AUTHORIZATION=f"Bearer {first.data['access']}",
+        )
+        self.assertEqual(profile.status_code, status.HTTP_200_OK)
+
+    def test_access_token_cannot_be_replayed_at_refresh_endpoint(self):
+        from api.authentication import generate_tokens_for_user
+
+        tokens = generate_tokens_for_user(self.user)
+        response = self.client.post('/api/auth/refresh/', {'refresh': tokens['access']}, format='json')
+        self.assertIn(response.status_code, (status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED))
+
+    def test_review_requires_completed_stay_and_is_unique(self):
+        headers = self.get_jwt_header(self.user)
+
+        future = Reservation.objects.create(
+            user=self.user,
+            room=self.room,
+            check_in=date.today() + timedelta(days=3),
+            check_out=date.today() + timedelta(days=5),
+            guests_count=1,
+            total_price=300,
+            status='confirmed',
+        )
+        blocked = self.client.post(
+            '/api/reviews/',
+            {'hotel': self.hotel.id, 'rating': 5, 'comment': 'Too early'},
+            format='json',
+            **headers,
+        )
+        self.assertEqual(blocked.status_code, status.HTTP_400_BAD_REQUEST)
+
+        future.status = 'completed'
+        future.check_in = date.today() - timedelta(days=5)
+        future.check_out = date.today() - timedelta(days=2)
+        future.save()
+
+        first = self.client.post(
+            '/api/reviews/',
+            {'hotel': self.hotel.id, 'rating': 5, 'comment': 'Lovely stay'},
+            format='json',
+            **headers,
+        )
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(first.data['user'], self.user.id)
+
+        duplicate = self.client.post(
+            '/api/reviews/',
+            {'hotel': self.hotel.id, 'rating': 1, 'comment': 'Second review'},
+            format='json',
+            **headers,
+        )
+        self.assertEqual(duplicate.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_review_user_field_is_read_only(self):
+        headers = self.get_jwt_header(self.user)
+        response = self.client.post(
+            '/api/reviews/',
+            {'hotel': self.hotel.id, 'rating': 4, 'comment': 'x', 'user': self.other_user.id},
+            format='json',
+            **headers,
+        )
+        # Rejected for lack of a completed stay, never accepted under another user.
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Review.objects.count(), 0)
+
+    def test_list_endpoints_are_paginated(self):
+        for url in ('/api/hotels/', '/api/rooms/', '/api/reviews/'):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, status.HTTP_200_OK, url)
+            self.assertIn('results', response.data, url)
+            self.assertIn('count', response.data, url)
+
+        headers = self.get_jwt_header(self.user)
+        response = self.client.get('/api/reservations/', **headers)
+        self.assertIn('results', response.data)
+
+    def test_page_size_is_capped(self):
+        response = self.client.get('/api/hotels/', {'page_size': 100000})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertLessEqual(len(response.data['results']), 100)
+
+    @override_settings(CORS_ALLOWED_ORIGINS=['http://localhost:5173'], CORS_ALLOW_CREDENTIALS=False)
+    def test_cors_rejects_unlisted_original(self):
+        evil = self.client.get('/api/hotels/', HTTP_ORIGIN='https://evil.example')
+        self.assertIsNone(evil.headers.get('Access-Control-Allow-Origin'))
+
+        allowed = self.client.get('/api/hotels/', HTTP_ORIGIN='http://localhost:5173')
+        self.assertEqual(allowed.headers.get('Access-Control-Allow-Origin'), 'http://localhost:5173')
+        self.assertIsNone(allowed.headers.get('Access-Control-Allow-Credentials'))

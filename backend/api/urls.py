@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     RegisterView,
     LoginView,
+    RefreshTokenView,
     CurrentUserProfileView,
     HotelListCreateView,
     HotelDetailView,
@@ -19,6 +20,7 @@ urlpatterns = [
     # Auth Endpoints
     path('auth/register/', RegisterView.as_view(), name='register'),
     path('auth/login/', LoginView.as_view(), name='login'),
+    path('auth/refresh/', RefreshTokenView.as_view(), name='token-refresh'),
     path('auth/profile/', CurrentUserProfileView.as_view(), name='user-profile'),
 
     # Hotel Endpoints
