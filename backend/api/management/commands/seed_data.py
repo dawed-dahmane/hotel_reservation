@@ -48,17 +48,17 @@ class Command(BaseCommand):
 
         # 2. Demo User
         demo_user, created = User.objects.get_or_create(
-            username='john_doe',
-            defaults={
-                'email': 'john@example.com',
-                'first_name': 'John',
-                'last_name': 'Doe',
+            username='test_user',
+            defaults={ 
+                'email': 'test@example.com',
+                'first_name': 'test',
+                'last_name': 'user',
             }
         )
         if created:
-            demo_user.set_password(self._password_for('SEED_DEMO_PASSWORD', 'john_doe'))
+            demo_user.set_password(self._password_for('SEED_DEMO_PASSWORD', 'admin'))
             demo_user.save()
-            self.stdout.write(self.style.SUCCESS("Created demo user (username: john_doe)"))
+            self.stdout.write(self.style.SUCCESS("Created demo user (username: test_user)"))
 
         # 3. Sample Hotels
         hotels_data = [
